@@ -17,8 +17,6 @@ Created on Wed Jun 25 18:17:32 2025
 import dash
 import dash_bootstrap_components as dbc
 from dash import html, dcc, Output, Input, State, dash_table
-import pandas as pd
-import plotly.express as px
 from MosaicSurfacef import Surface
 import matplotlib.pyplot as plt
 import base64
@@ -31,41 +29,6 @@ from analysis_script import run_analysis
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.FLATLY], suppress_callback_exceptions=True)
 # app = dash.Dash(__name__, suppress_callback_exceptions=True)
 
-# app.layout = html.Div([
-#     html.H2("Option Backtest"),
-    
-#     html.Label("Choose a start date:"),
-#     dcc.DatePickerSingle(
-#         id='data-osservazione',
-#         date=None
-#     ),
-    
-#     html.Label("choose a end date:"),
-#     dcc.DatePickerSingle(
-#         id='end-date',
-#         date=None,  # valore di default
-#     ),
-    
-    
-#     html.Button("Load Data", id='carica-dati', n_clicks=0),
-    
-#     html.Br(), html.Hr(),
-    
-#     html.Div(id='tabella-output'),
-#     html.Div(id='input-manuale'),
-    
-#     html.Br(), html.Hr(),
-    
-#     # Bottone genera grafici
-#     html.Button("Backtest", id="btn-grafici", n_clicks=0),
-    
-#     html.Div(id="output-grafici", style={
-#         "marginTop": "20px", "maxHeight": "600px", "overflowY": "auto",
-#         "display": "grid", "gridTemplateColumns": "repeat(4, 1fr)", "gap": "10px"
-#     }),
-#     dcc.Store(id='store-expiries') 
-    
-# ])
 
 app.layout = dbc.Container([
     # Immagine intestazione (assicurati che sia salvata in /assets/)
@@ -228,10 +191,10 @@ def carica_dati(n, data_sel):
     )
     
     ##
-    putcall = ["P", "C"]
+    putcall = ["P", "C", "F"]
 
     initial_rows = [
-    {"Contratto": None, "Strike": None, "P/C": None, "Volume": None}
+    {"Contratto": None, "Strike": None, "P/C": None, "Volume": None, "Live": False}
     for _ in range(4)
     ]
 
@@ -244,6 +207,7 @@ def carica_dati(n, data_sel):
                 {"name": "Strike", "id": "Strike", "type": "numeric"},
                 {"name": "P/C", "id": "P/C", "presentation": "dropdown"},
                 {"name": "Volume", "id": "Volume", "type": "numeric"},
+                {"name": "Live", "id": "Live",  "presentation": "dropdown"},  # <--- questa riga
             ],
             data=initial_rows,
             editable=True,
@@ -254,6 +218,12 @@ def carica_dati(n, data_sel):
                 "P/C": {
                     "options": [{"label": i, "value": i} for i in putcall]
                 },
+                "Live": {
+                    "options": [
+                        {"label": "✔️ Live", "value": True},
+                        {"label": "❌ Hedged", "value": False}
+                        ]
+                    }
             },
             style_table={'minWidth': '100%', 'overflowX': 'auto', 'zIndex': 1000},
             style_cell={'textAlign': 'center'},
@@ -295,25 +265,41 @@ def run_backtest(n_clicks, portfolio_rows, end_date, start_date, expiries):
 
     option_specs = []
     for row in portfolio_rows:
-        if not row['Contratto'] or row['Strike'] is None or not row['P/C'] or row['Volume'] is None:
-            continue
+        if row['P/C'] == "F":
+            name = f"{row['Contratto']} {row['P/C']}"
+            option_type = "F"
+            position = row['Volume']
+            underlying = row['Contratto'].split()[1]
+            option_specs.append({
+                'name': name,
+                'type': option_type,
+                'position': int(position),
+                'underlying': underlying,
+                'live': True
+            })
+        else:
         
-        name = f"{row['Contratto']} {row['P/C']}{row['Strike']}"
-        option_type = 'call' if row['P/C'] == 'C' else 'put'
-        position = row['Volume']
-        expiry = expiry_dict.get(row['Contratto'], None)
-        if not expiry:
-            continue
-        underlying = row['Contratto'].split()[1]
-        
-        option_specs.append({
-            'name': name,
-            'K': float(row['Strike']),
-            'type': option_type,
-            'position': int(position),
-            'expiry': expiry,
-            'underlying': underlying
-        })
+            if not row['Contratto'] or row['Strike'] is None or not row['P/C'] or row['Volume'] is None:
+                continue
+            
+            name = f"{row['Contratto']} {row['P/C']}{row['Strike']}"
+            option_type = 'call' if row['P/C'] == 'C' else 'put'
+            position = row['Volume']
+            expiry = expiry_dict.get(row['Contratto'], None)
+            Live = row['Live']
+            if not expiry:
+                continue
+            underlying = row['Contratto'].split()[1]
+            
+            option_specs.append({
+                'name': name,
+                'K': float(row['Strike']),
+                'type': option_type,
+                'position': int(position),
+                'expiry': expiry,
+                'underlying': underlying,
+                'live': Live
+            })
 
     # === Esegui lo script di backtest in una funzione separata ===
     figures = run_analysis(start_date, end_date, option_specs)
