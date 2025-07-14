@@ -14,7 +14,6 @@ def run_analysis(start_date, end_date, option_specs):
     
     
     ############################## INPUT ##########################################
-    
    
     holidays = pd.to_datetime(['16-April-2025'])
     Underlyings = [d['underlying'] for d in option_specs if 'underlying' in d]
@@ -42,10 +41,14 @@ def run_analysis(start_date, end_date, option_specs):
                 # Get Option specs with c underlying
                 opts = [o for o in option_specs if o['underlying'] == c]
                 for opt in opts:
-                    name = opt['name']
-                    idx = MosaicSLice['instrument_key'] == name
-                    settlement = MosaicSLice.loc[idx, 'value'].iloc[0]
-                    Timeseries[name][i] = settlement
+                    if opt["type"] != "F":
+                        name = opt['name']
+                        idx = MosaicSLice['instrument_key'] == name
+                        settlement = MosaicSLice.loc[idx, 'value'].iloc[0]
+                        Timeseries[name][i] = settlement
+                    else:
+                        name = opt['name']
+                        Timeseries[name][i] = Timeseries[c][i]
     
     Timeseries = {'Date:': bdays, **Timeseries}
     Data = pd.DataFrame(Timeseries)
@@ -130,37 +133,46 @@ def run_analysis(start_date, end_date, option_specs):
     PtfGreeks = {g: np.zeros(len(Dates)) for g in ['Delta', 'Gamma', 'Vega', 'Theta', 'Vanna']}
     for i, date in enumerate(Dates):
         for opt in option_specs:
-            name, K, typ, pos, under = opt['name'], opt['K'], opt['type'], opt['position'], opt['underlying']
-            S = Data[under]
-            price = Data[name].iloc[i]
-            expiry_date = pd.to_datetime(opt['expiry'])
-            days_to_exp = working_days_to_expiry(date, expiry_date)
-            Ttm = days_to_exp / 255
-            be = BEImplicito(S.iloc[i], K, BEIniziale, Ttm, 0, price, typ)
-            vol = be * np.sqrt(255)
-            delta = DeltaBachelier(S.iloc[i], K, vol, Ttm, 0)[0 if typ == 'call' else 1]
-            Greeks[name]['BE'][i] = be
-            Greeks[name]['Delta'][i] = delta
-            Greeks[name]['Gamma'][i] = GammaBachelierEurope(S.iloc[i], K, vol, Ttm, 0, 0.01)[0]
-            Greeks[name]['Vega'][i] = VegaBachelierEurope(S.iloc[i], K, vol, Ttm, 0, 0.01)[0]
-            Greeks[name]['Theta'][i] = ThetaBachelierEurope(typ, S.iloc[i], K, Ttm, 0, vol, 255)
-            Greeks[name]['Vanna'][i] = VannaBachelierEurope(S.iloc[i], K, vol, Ttm, 0, 0.01, 0.01 * np.sqrt(255))[0]
-    
-            PtfGreeks['Delta'][i] += delta * pos
+            if opt["type"] != "F":
+                name, K, typ, pos, under = opt['name'], opt['K'], opt['type'], opt['position'], opt['underlying']
+                S = Data[under]
+                price = Data[name].iloc[i]
+                expiry_date = pd.to_datetime(opt['expiry'])
+                days_to_exp = working_days_to_expiry(date, expiry_date)
+                Ttm = days_to_exp / 255
+                be = BEImplicito(S.iloc[i], K, BEIniziale, Ttm, 0, price, typ)
+                vol = be * np.sqrt(255)
+                delta = DeltaBachelier(S.iloc[i], K, vol, Ttm, 0)[0 if typ == 'call' else 1]
+                Greeks[name]['BE'][i] = be
+                Greeks[name]['Delta'][i] = delta
+                Greeks[name]['Gamma'][i] = GammaBachelierEurope(S.iloc[i], K, vol, Ttm, 0, 0.01)[0]
+                Greeks[name]['Vega'][i] = VegaBachelierEurope(S.iloc[i], K, vol, Ttm, 0, 0.01)[0]
+                Greeks[name]['Theta'][i] = ThetaBachelierEurope(typ, S.iloc[i], K, Ttm, 0, vol, 255)
+                Greeks[name]['Vanna'][i] = VannaBachelierEurope(S.iloc[i], K, vol, Ttm, 0, 0.01, 0.01 * np.sqrt(255))[0]
+            else:
+                name,  typ, pos, under = opt['name'],  opt['type'], opt['position'], opt['underlying']
+                S = Data[under]
+                price = Data[name].iloc[i]
+                delta = 1
+                Greeks[name]['Delta'][i] = delta
+
+        
+            if opt['live'] == True or opt["type"] == "F":   
+                PtfGreeks['Delta'][i] += delta * pos 
             PtfGreeks['Gamma'][i] += Greeks[name]['Gamma'][i] * pos
             PtfGreeks['Vega'][i] += Greeks[name]['Vega'][i] * pos * 1000
             PtfGreeks['Theta'][i] += Greeks[name]['Theta'][i] * pos * 1000
             PtfGreeks['Vanna'][i] += Greeks[name]['Vanna'][i] * pos * 1000
     
     ###############################  DELTA P&L ###################################
-    
     DeltaTot = np.diff(PtfGreeks['Delta'])
     DeltaTot = np.concatenate([[0], DeltaTot])
     DeltaPL = np.zeros(len(Dates)-1)
     for opt in option_specs:
-        S = Data[opt['underlying']]
-        name, pos = opt['name'], opt['position']
-        DeltaPL += -Greeks[name]['Delta'][:-1] * np.diff(S) * 1000 * pos
+        if opt['live'] == False and opt["type"] != "F":
+            S = Data[opt['underlying']]
+            name, pos = opt['name'], opt['position']
+            DeltaPL += -Greeks[name]['Delta'][:-1] * np.diff(S) * 1000 * pos
     for opt in option_specs:
         name = opt['name']
         DeltaPL += np.diff(Data[name]) * opt['position'] * 1000
@@ -168,6 +180,12 @@ def run_analysis(start_date, end_date, option_specs):
     
     ################################ GREEK EXPLANATION ###########################
     # DeltaPLfromGamma = 0.5 * np.diff(S)**2 * PtfGreeks['Gamma'][:-1] * 1000
+    DeltaPLfromDelta = sum([
+        np.diff(Data[opt['underlying']]) * Greeks[opt['name']]['Delta'][:-1] * 1000  * opt['position']
+        for opt in option_specs if opt['live'] == True
+    ])
+   
+    
     DeltaPLfromGamma = sum([
         np.diff(Data[opt['underlying']])** 2* 0.5 * Greeks[opt['name']]['Gamma'][:-1] * 1000  * opt['position']
         for opt in option_specs
@@ -181,7 +199,10 @@ def run_analysis(start_date, end_date, option_specs):
         np.diff(Data[opt['underlying']]) * np.diff(Greeks[opt['name']]['BE']) * Greeks[opt['name']]['Vanna'][:-1] * 1000 * 100 * opt['position']
         for opt in option_specs
     ])
-    DeltaPLfromGreeks = DeltaPLfromGamma + DeltaPLfromVega + DeltaPLfromTheta + DeltaPLfromVanna
+    
+    if type(DeltaPLfromDelta) == int:
+        DeltaPLfromDelta = np.zeros(len(DeltaPLfromGamma))
+    DeltaPLfromGreeks = DeltaPLfromDelta + DeltaPLfromGamma + DeltaPLfromVega + DeltaPLfromTheta + DeltaPLfromVanna
     DeltaPLUnexplained = DeltaPL - DeltaPLfromGreeks
     
     ####################################### PLOT ##################################
@@ -251,14 +272,15 @@ def run_analysis(start_date, end_date, option_specs):
     
     # === Greeks ptf ===
     
-    figGreeks, axes = plt.subplots(4, 1, sharex=True, figsize=(12, 10))
+    figGreeks, axes = plt.subplots(5, 1, sharex=True, figsize=(12, 10))
     greeks = {
+        'Delta': PtfGreeks['Delta'],
         "Gamma": PtfGreeks['Gamma'],
         "Vega": PtfGreeks['Vega'],
         "Theta": PtfGreeks['Theta'],
         "Vanna": PtfGreeks['Vanna']
     }
-    colors = ['#131f58', '#8c1c13', '#175e17', '#783c96']
+    colors = ['#2dd24b', '#131f58', '#8c1c13', '#175e17', '#783c96']
     
     for i, (greek, series) in enumerate(greeks.items()):
         axes[i].bar(Dates[:-1], series[:-1], color=colors[i])
@@ -297,9 +319,9 @@ def run_analysis(start_date, end_date, option_specs):
             ax.bar(x2[i], DeltaPLUnexplained[i], bottom=0, width=bar_width, color='lightsalmon', label='Unexplained' if i == 0 else "")
     
     # Serie D-G
-    colors = ['#131f58', '#8c1c13', '#175e17', '#783c96']
-    labels = ['Gamma', 'Vega', 'Theta', 'Vanna']
-    components = [DeltaPLfromGamma, DeltaPLfromVega, DeltaPLfromTheta, DeltaPLfromVanna]
+    colors = ['#2dd24b','#131f58', '#8c1c13', '#175e17', '#783c96']
+    labels = ['Delta', 'Gamma', 'Vega', 'Theta', 'Vanna']
+    components = [DeltaPLfromDelta, DeltaPLfromGamma, DeltaPLfromVega, DeltaPLfromTheta, DeltaPLfromVanna]
     
     for i in range(len(x)):
         pos_bottom = 0
