@@ -6,3 +6,9 @@ The inputs to the script are:
 -options and futures in the portfolio
 
 For options, there is the possibility to keep them either "live" or "hedged". In the latter case, the application performs daily delta hedging at the close.
+
+Once the repository has been cloned, run the script Dash3.py. Then, open the following address in your browser: http://127.0.0.1:8050.
+
+The prerequisites for running the app, in addition to the standard Python packages, are dash and mosaic_api_client. Use the pip install command for dash and follow the instructions at the following link for the Mosaic API:
+https://github.com/hartreepartners/mosaic-api-client
+
