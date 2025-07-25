@@ -1,4 +1,4 @@
-def run_analysis(start_date, end_date, option_specs):
+def run_analysis(start_date, end_date, option_specs, BSCheck):
 
     import os
     os.environ['MOSAIC_ENV'] = 'PROD'
@@ -11,7 +11,6 @@ def run_analysis(start_date, end_date, option_specs):
     style.use('seaborn-v0_8-paper')
     from scipy.stats import norm
     from mosaic_api_client.options_api import OptionsApi as OA
-    
     
     ############################## INPUT ##########################################
    
@@ -127,8 +126,74 @@ def run_analysis(start_date, end_date, option_specs):
                 break
         return NewBE
     
-    ############################# Main loop ######################################
     
+    def BlackScholesPrice(F, K, vol, Ttm, r, option_type):
+        # F: forward price (underlying)
+        # K: strike
+        # vol: volatility (annualized std)
+        # Ttm: time to maturity (in years)
+        # r: interest rate (can essere 0 se usi forward)
+        # option_type: 'call' or 'put'
+        d1 = (np.log(F / K) + 0.5 * vol**2 * Ttm) / (vol * np.sqrt(Ttm))
+        d2 = d1 - vol * np.sqrt(Ttm)
+        discount = np.exp(-r * Ttm)
+        if option_type == 'call':
+            price = discount * (F * norm.cdf(d1) - K * norm.cdf(d2))
+        else:
+            price = discount * (K * norm.cdf(-d2) - F * norm.cdf(-d1))
+        return price
+
+    def BlackScholesGreeks(F, K, vol, Ttm, r, option_type, shock=0.01):
+        # Delta
+        d1 = (np.log(F / K) + 0.5 * vol**2 * Ttm) / (vol * np.sqrt(Ttm))
+        delta = norm.cdf(d1) if option_type == 'call' else -norm.cdf(-d1)
+        
+        # Gamma
+        gamma = norm.pdf(d1) / (F * vol * np.sqrt(Ttm))
+        
+        # Vega (derivata rispetto alla volatilità)
+        vega = F * norm.pdf(d1) * np.sqrt(Ttm)
+        
+        # Theta (approssimazione per 1 giorno)
+        price_today = BlackScholesPrice(F, K, vol, Ttm, r, option_type)
+        price_tomorrow = BlackScholesPrice(F, K, vol, max(Ttm - 1/255, 1e-8), r, option_type)
+        theta = price_tomorrow - price_today
+        
+        # Vanna (cross derivative rispetto a S e vol)
+        delta_up_vol_up = (BlackScholesPrice(F + shock, K, vol + shock, Ttm, r, option_type) - 
+                           BlackScholesPrice(F - shock, K, vol + shock, Ttm, r, option_type)) / (2 * shock)
+        delta = (BlackScholesPrice(F + shock, K, vol, Ttm, r, option_type) - 
+                 BlackScholesPrice(F - shock, K, vol, Ttm, r, option_type)) / (2 * shock)
+        vanna = delta_up_vol_up - delta
+        
+        return {
+            'Delta': delta,
+            'Gamma': gamma,
+            'Vega': vega,
+            'Theta': theta,
+            'Vanna': vanna
+        }
+    
+    def ImpliedVol(F, K, BSIniziale, Ttm, r, Ptarget, Type):
+        NewBS = BSIniziale
+        # Calcolo iniziale differenza tra prezzo target e prezzo BS
+        DiffPrices = Ptarget - BlackScholesPrice(F, K, BSIniziale, Ttm, r, Type)
+        count = 0
+        while abs(DiffPrices) > 0.02:  # tolleranza di 2 centesimi
+            P0 = BlackScholesPrice(F, K, NewBS, Ttm, r, Type)
+            Pvup = BlackScholesPrice(F, K, NewBS + 0.01, Ttm, r, Type)
+            Vega = Pvup - P0
+            if Vega == 0:
+                break  # evita divisione per zero
+            DiffVol = DiffPrices / Vega * 0.01  # 0.01 = passo usato
+            NewBS += DiffVol
+            DiffPrices = Ptarget - BlackScholesPrice(F, K, NewBS, Ttm, r, Type)
+            count += 1
+            if count > 10:
+                break
+        return NewBS
+    
+    ############################# Main loop ######################################
     Greeks = {name: {g: np.zeros(len(Dates)) for g in ['BE', 'Delta', 'Gamma', 'Vega', 'Theta', 'Vanna']} for name in [o['name'] for o in option_specs]}
     PtfGreeks = {g: np.zeros(len(Dates)) for g in ['Delta', 'Gamma', 'Vega', 'Theta', 'Vanna']}
     for i, date in enumerate(Dates):
@@ -140,15 +205,27 @@ def run_analysis(start_date, end_date, option_specs):
                 expiry_date = pd.to_datetime(opt['expiry'])
                 days_to_exp = working_days_to_expiry(date, expiry_date)
                 Ttm = days_to_exp / 255
-                be = BEImplicito(S.iloc[i], K, BEIniziale, Ttm, 0, price, typ)
-                vol = be * np.sqrt(255)
-                delta = DeltaBachelier(S.iloc[i], K, vol, Ttm, 0)[0 if typ == 'call' else 1]
-                Greeks[name]['BE'][i] = be
-                Greeks[name]['Delta'][i] = delta
-                Greeks[name]['Gamma'][i] = GammaBachelierEurope(S.iloc[i], K, vol, Ttm, 0, 0.01)[0]
-                Greeks[name]['Vega'][i] = VegaBachelierEurope(S.iloc[i], K, vol, Ttm, 0, 0.01)[0]
-                Greeks[name]['Theta'][i] = ThetaBachelierEurope(typ, S.iloc[i], K, Ttm, 0, vol, 255)
-                Greeks[name]['Vanna'][i] = VannaBachelierEurope(S.iloc[i], K, vol, Ttm, 0, 0.01, 0.01 * np.sqrt(255))[0]
+                
+                if BSCheck == True:
+                    vol = ImpliedVol(S.iloc[i], K, 0.6, Ttm, 0, price, typ)
+                    greeks = BlackScholesGreeks(S.iloc[i], K, vol, Ttm, 0, typ, shock=0.01)
+                    Greeks[name]['BE'][i] = vol
+                    delta = greeks['Delta']
+                    Greeks[name]['Delta'][i] = delta
+                    Greeks[name]['Gamma'][i] = greeks['Gamma']
+                    Greeks[name]['Vega'][i] = greeks['Vega']*0.01
+                    Greeks[name]['Theta'][i] = greeks['Theta']
+                    Greeks[name]['Vanna'][i] = greeks['Vanna']
+                else:
+                    be = BEImplicito(S.iloc[i], K, BEIniziale, Ttm, 0, price, typ)
+                    vol = be * np.sqrt(255)
+                    delta = DeltaBachelier(S.iloc[i], K, vol, Ttm, 0)[0 if typ == 'call' else 1]
+                    Greeks[name]['BE'][i] = be
+                    Greeks[name]['Delta'][i] = delta
+                    Greeks[name]['Gamma'][i] = GammaBachelierEurope(S.iloc[i], K, vol, Ttm, 0, 0.01)[0]
+                    Greeks[name]['Vega'][i] = VegaBachelierEurope(S.iloc[i], K, vol, Ttm, 0, 0.01)[0]
+                    Greeks[name]['Theta'][i] = ThetaBachelierEurope(typ, S.iloc[i], K, Ttm, 0, vol, 255)
+                    Greeks[name]['Vanna'][i] = VannaBachelierEurope(S.iloc[i], K, vol, Ttm, 0, 0.01, 0.01 * np.sqrt(255))[0]
             else:
                 name,  typ, pos, under = opt['name'],  opt['type'], opt['position'], opt['underlying']
                 S = Data[under]
@@ -229,7 +306,10 @@ def run_analysis(start_date, end_date, option_specs):
     ax3.yaxis.set_ticks_position('left')
     
     ax3.plot(Dates, Greeks[option_specs[0]['name']]['BE'] ,color='#2c3e50', linestyle='--', label='Break Even')
-    ax3.set_ylabel('Break Even')
+    if BSCheck == True:
+        ax3.set_ylabel('Implied vol')
+    else:
+        ax3.set_ylabel('Break Even')
     
     fig1.autofmt_xdate()
     plt.tight_layout()
@@ -262,7 +342,10 @@ def run_analysis(start_date, end_date, option_specs):
         shift = timedelta(days=(i - len(option_specs)/2) * 0.2)
         ax2.bar(Dates[1:] + shift, np.diff(BE), label=f'Delta BE {name}', width=bar_width, color=colors[i % len(colors)])
     
-    ax2.set_title('Delta Implied Break Even')
+    if BSCheck == True:
+        ax2.set_title('Delta Implied Vol')
+    else:
+        ax2.set_title('Delta Implied Break Even')
     ax2.grid(True)
     ax2.set_axisbelow(True)
     ax2.legend()

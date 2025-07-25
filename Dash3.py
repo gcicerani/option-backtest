@@ -22,6 +22,8 @@ import matplotlib.pyplot as plt
 import base64
 import io
 from analysis_script import run_analysis
+import dash_daq as daq
+
 
 
 # external_stylesheets=[dbc.themes.CYBORG]
@@ -48,11 +50,19 @@ app.layout = dbc.Container([
             dcc.DatePickerSingle(id='end-date', date=None),
         ], width=3),
 
-        dbc.Col([
-            html.Label(" "),
-            dbc.Button("📂 Load Data", id='carica-dati', n_clicks=0, color="primary", className="mt-2"),
-        ], width=2),
-    ], className="mb-4"),
+          dbc.Col([
+        html.Label(" "),
+        html.Div([
+            dbc.Button("📂 Load Data", id='carica-dati', n_clicks=0, color="primary"),
+            daq.ToggleSwitch(
+                id='bs-toggle',
+                label='Black & Scholes',
+                value=False,
+                style={'marginLeft': '20px'}
+            )
+        ], style={'display': 'flex', 'alignItems': 'center'})
+    ], width=4),
+    ], className="mb-4", style = {"display": "flex", "alignItems": "center"}),
 
     html.Hr(),
 
@@ -87,6 +97,7 @@ app.layout = dbc.Container([
         "gridTemplateColumns": "repeat(4, 1fr)",
         "gap": "10px"
     }),
+    
 
     dcc.Store(id='store-expiries')
 ], fluid=True)
@@ -99,14 +110,15 @@ app.layout = dbc.Container([
     Output('input-manuale', 'children'),
     Output('store-expiries', 'data'),
     Input('carica-dati', 'n_clicks'),
+    State('bs-toggle', 'value'),
     State('data-osservazione', 'date')
 )
-def carica_dati(n, data_sel):
+def carica_dati(n, use_black_scholes, data_sel):
     if not data_sel:
         return "Choose a start date first", [], []
     
     # LANCIA SCRIPT BACKEND CON LA DATA
-    Output = Surface(data_sel)
+    Output = Surface(data_sel, use_black_scholes)
     df = Output[0]  # <-- tuo script
     dfBE = Output[1]
     ExpireTable = Output[2][0:12]
@@ -234,7 +246,7 @@ def carica_dati(n, data_sel):
     layout_tabella = html.Div([
         html.H4("Premium Surface"),
         table,
-        html.H4("Break Even Surface"),
+        html.H4("Implied Surface"),
         tableBE,
         html.H4("Expire Table"),
         tableExpiries,
@@ -250,13 +262,14 @@ def carica_dati(n, data_sel):
 @app.callback(
     Output('output-grafici', 'children'),
     Input('btn-grafici', 'n_clicks'),
+    State('bs-toggle', 'value'),
     State('input-opzioni', 'data'),
     State('end-date', 'date'),
     State('data-osservazione', 'date'),
     State('store-expiries', 'data'),
     prevent_initial_call=True
 )
-def run_backtest(n_clicks, portfolio_rows, end_date, start_date, expiries):
+def run_backtest(n_clicks, use_black_scholes,  portfolio_rows, end_date, start_date, expiries):
     if not n_clicks or not portfolio_rows or not end_date:
         return []
 
@@ -302,7 +315,7 @@ def run_backtest(n_clicks, portfolio_rows, end_date, start_date, expiries):
             })
 
     # === Esegui lo script di backtest in una funzione separata ===
-    figures = run_analysis(start_date, end_date, option_specs)
+    figures = run_analysis(start_date, end_date, option_specs, use_black_scholes)
 
     # === Converte i grafici matplotlib in immagini base64 ===
     def fig_to_base64(fig):

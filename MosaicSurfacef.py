@@ -4,7 +4,7 @@ Created on Wed Jun 25 14:08:08 2025
 
 @author: GCicerani
 """
-def Surface(Date):
+def Surface(Date, BSCheck):
     import os
     os.environ['MOSAIC_ENV'] = 'PROD'
     from mosaic_api_client.options_api import OptionsApi as OA
@@ -40,6 +40,43 @@ def Surface(Date):
     def working_days_to_expiry(current_date, target_expiry):
         bdays = pd.bdate_range(current_date, target_expiry, freq='C', holidays=holidays)
         return max(len(bdays) - 1, 0)
+    
+    
+    def BlackScholesPrice(F, K, vol, Ttm, r, option_type):
+        # F: forward price (underlying)
+        # K: strike
+        # vol: volatility (annualized std)
+        # Ttm: time to maturity (in years)
+        # r: interest rate (can essere 0 se usi forward)
+        # option_type: 'call' or 'put'
+        d1 = (np.log(F / K) + 0.5 * vol**2 * Ttm) / (vol * np.sqrt(Ttm))
+        d2 = d1 - vol * np.sqrt(Ttm)
+        discount = np.exp(-r * Ttm)
+        if option_type == 'call':
+            price = discount * (F * norm.cdf(d1) - K * norm.cdf(d2))
+        else:
+            price = discount * (K * norm.cdf(-d2) - F * norm.cdf(-d1))
+        return price
+    
+    
+    def ImpliedVol(F, K, BSIniziale, Ttm, r, Ptarget, Type):
+        NewBS = BSIniziale
+        # Calcolo iniziale differenza tra prezzo target e prezzo BS
+        DiffPrices = Ptarget - BlackScholesPrice(F, K, BSIniziale, Ttm, r, Type)
+        count = 0
+        while abs(DiffPrices) > 0.02:  # tolleranza di 2 centesimi
+            P0 = BlackScholesPrice(F, K, NewBS, Ttm, r, Type)
+            Pvup = BlackScholesPrice(F, K, NewBS + 0.001, Ttm, r, Type)
+            Vega = Pvup - P0
+            if Vega == 0:
+                break  # evita divisione per zero
+            DiffVol = DiffPrices / Vega * 0.001  # 0.01 = passo usato
+            NewBS += DiffVol
+            DiffPrices = Ptarget - BlackScholesPrice(F, K, NewBS, Ttm, r, Type)
+            count += 1
+            if count > 10:
+                break
+        return NewBS
     
     ##########################################################################
     #Date = '2025-06-19'
@@ -87,6 +124,7 @@ def Surface(Date):
     
     # Superfice implied breakeven
     BESurface = np.zeros([12, len(Strikes)])
+    # breakpoint()
     for i in range(12):
         contract = Contracts[i]
         underlyng = S[i]
@@ -97,10 +135,12 @@ def Surface(Date):
             expiry = ExpireTable.loc[ExpireTable['Contracts'] == contract, 'Expiries'].item()
             days = working_days_to_expiry(Date, expiry)
             Ttm = days/255
-            Type = 'call' if typ == 'C' else 'P'
-            be = BEImplicito(underlyng, strike, 1.50, Ttm, 0, premium, Type)
+            Type = 'call' if typ == 'C' else 'put'
+            if BSCheck == True:
+                be = ImpliedVol(underlyng, strike, 0.6, Ttm, 0, premium, Type)                
+            else:
+                be = BEImplicito(underlyng, strike, 1.50, Ttm, 0, premium, Type)
             BESurface[i,j] = be
-            
     fullmatrix_be = np.hstack([BESurface, np.array(S[0:12]).reshape(-1,1)])
     dfBE = pd.DataFrame(fullmatrix_be, index=Contracts[0:12], columns=columns)
 
