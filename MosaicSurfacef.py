@@ -4,7 +4,7 @@ Created on Wed Jun 25 14:08:08 2025
 
 @author: GCicerani
 """
-def Surface(Date, BSCheck):
+def Surface(Date, BSCheck, commodity):
     import os
     os.environ['MOSAIC_ENV'] = 'PROD'
     from mosaic_api_client.options_api import OptionsApi as OA
@@ -82,11 +82,20 @@ def Surface(Date, BSCheck):
     #Date = '2025-06-19'
     
     # Importo superficie di volatilita' a quella data
-    MosaiCSurface = OA.get_option_surface_settlement(symbol='B', exchange='ICE', 
-                                    as_of_date= Date, allow_indicative=True, include_oi=True)
-    
+    if commodity == 'Brent':
+        MosaiCSurface = OA.get_option_surface_settlement(symbol='B', exchange='ICE', 
+                                        as_of_date= Date, allow_indicative=True, include_oi=True)
+    elif commodity == 'WTI':
+        MosaiCSurface = OA.get_option_surface_settlement(symbol='LO', exchange='CME', 
+                                        as_of_date= Date, allow_indicative=True, include_oi=True)       
+        
     # Contracts
     Contracts = MosaiCSurface['future_key'].unique()
+    if commodity == 'WTI':
+        Contracts = np.array(
+        [x.replace("CL", "LO") if isinstance(x, str) else x for x in Contracts],
+        dtype=object)
+                    
     
     # Expiries
     Expiries = MosaiCSurface['expiration_date'].unique()
@@ -103,9 +112,14 @@ def Surface(Date, BSCheck):
     Strikes = np.arange(Srounded-25,Srounded+30,5)
     
     # Riempio la superficie dei premi
-    PremiumSurface = np.zeros([12, len(Strikes)])
+    if commodity == 'Brent':
+        Nmaturity = 12
+    elif commodity == 'WTI':
+        Nmaturity = 8
     
-    for i in range(12):
+    PremiumSurface = np.zeros([Nmaturity, len(Strikes)])
+
+    for i in range(Nmaturity):
         contract = Contracts[i]
         underlyng = S[i]    
         for j in range(len(Strikes)):
@@ -113,19 +127,20 @@ def Surface(Date, BSCheck):
             typ = 'P' if strike < underlyng else 'C'
             key = contract + ' ' + typ + str(strike)
             Idx = MosaiCSurface['instrument_key'] == key
+            # breakpoint()
             PremiumSurface[i,j] = MosaiCSurface.loc[Idx, 'value'].item()
             
     
     # Creazione Dataframe
     columns = Strikes.tolist() + ['underlying']
-    full_matrix = np.hstack([PremiumSurface, np.array(S[0:12]).reshape(-1,1)])
+    full_matrix = np.hstack([PremiumSurface, np.array(S[0:Nmaturity]).reshape(-1,1)])
     # Creazione DataFrame
-    df = pd.DataFrame(full_matrix, index=Contracts[0:12], columns=columns)
+    df = pd.DataFrame(full_matrix, index=Contracts[0:Nmaturity], columns=columns)
     
     # Superfice implied breakeven
-    BESurface = np.zeros([12, len(Strikes)])
+    BESurface = np.zeros([Nmaturity, len(Strikes)])
     # breakpoint()
-    for i in range(12):
+    for i in range(Nmaturity):
         contract = Contracts[i]
         underlyng = S[i]
         for j in range(len(Strikes)):
@@ -141,8 +156,8 @@ def Surface(Date, BSCheck):
             else:
                 be = BEImplicito(underlyng, strike, 1.50, Ttm, 0, premium, Type)
             BESurface[i,j] = be
-    fullmatrix_be = np.hstack([BESurface, np.array(S[0:12]).reshape(-1,1)])
-    dfBE = pd.DataFrame(fullmatrix_be, index=Contracts[0:12], columns=columns)
+    fullmatrix_be = np.hstack([BESurface, np.array(S[0:Nmaturity]).reshape(-1,1)])
+    dfBE = pd.DataFrame(fullmatrix_be, index=Contracts[0:Nmaturity], columns=columns)
 
     
     return df, dfBE, ExpireTable
