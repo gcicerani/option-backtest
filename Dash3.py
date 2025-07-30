@@ -63,10 +63,10 @@ app.layout = dbc.Container([
             dcc.Dropdown(
            id='commodity-dropdown',
            options=[
-               {'label': 'Brent', 'value': 'B'},
+               {'label': 'Brent', 'value': 'Brent'},
                {'label': 'WTI', 'value': 'WTI'}
            ],
-           value='B',
+           value='Brent',
            clearable=False,
            style={'width': '120px', 'marginLeft': '20px'}
        )
