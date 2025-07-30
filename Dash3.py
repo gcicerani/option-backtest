@@ -59,7 +59,17 @@ app.layout = dbc.Container([
                 label='Black & Scholes',
                 value=False,
                 style={'marginLeft': '20px'}
-            )
+            ),
+            dcc.Dropdown(
+           id='commodity-dropdown',
+           options=[
+               {'label': 'Brent', 'value': 'B'},
+               {'label': 'WTI', 'value': 'WTI'}
+           ],
+           value='B',
+           clearable=False,
+           style={'width': '120px', 'marginLeft': '20px'}
+       )
         ], style={'display': 'flex', 'alignItems': 'center'})
     ], width=4),
     ], className="mb-4", style = {"display": "flex", "alignItems": "center"}),
@@ -111,14 +121,15 @@ app.layout = dbc.Container([
     Output('store-expiries', 'data'),
     Input('carica-dati', 'n_clicks'),
     State('bs-toggle', 'value'),
-    State('data-osservazione', 'date')
+    State('data-osservazione', 'date'),
+    State('commodity-dropdown', 'value')
 )
-def carica_dati(n, use_black_scholes, data_sel):
+def carica_dati(n, use_black_scholes, data_sel, commodity):
     if not data_sel:
         return "Choose a start date first", [], []
     
     # LANCIA SCRIPT BACKEND CON LA DATA
-    Output = Surface(data_sel, use_black_scholes)
+    Output = Surface(data_sel, use_black_scholes, commodity)
     df = Output[0]  # <-- tuo script
     dfBE = Output[1]
     ExpireTable = Output[2][0:12]
@@ -267,9 +278,10 @@ def carica_dati(n, use_black_scholes, data_sel):
     State('end-date', 'date'),
     State('data-osservazione', 'date'),
     State('store-expiries', 'data'),
+    State('commodity-dropdown', 'value'),
     prevent_initial_call=True
 )
-def run_backtest(n_clicks, use_black_scholes,  portfolio_rows, end_date, start_date, expiries):
+def run_backtest(n_clicks, use_black_scholes,  portfolio_rows, end_date, start_date, expiries, commodity):
     if not n_clicks or not portfolio_rows or not end_date:
         return []
 
@@ -315,7 +327,7 @@ def run_backtest(n_clicks, use_black_scholes,  portfolio_rows, end_date, start_d
             })
 
     # === Esegui lo script di backtest in una funzione separata ===
-    figures = run_analysis(start_date, end_date, option_specs, use_black_scholes)
+    figures = run_analysis(start_date, end_date, option_specs, use_black_scholes, commodity)
 
     # === Converte i grafici matplotlib in immagini base64 ===
     def fig_to_base64(fig):

@@ -1,4 +1,4 @@
-def run_analysis(start_date, end_date, option_specs, BSCheck):
+def run_analysis(start_date, end_date, option_specs, BSCheck, commodity):
 
     import os
     os.environ['MOSAIC_ENV'] = 'PROD'
@@ -31,11 +31,14 @@ def run_analysis(start_date, end_date, option_specs, BSCheck):
     
     # Main loop to get data
     Timeseries = {ts: np.zeros(len(bdays)) for ts in TotalNames}
-    
     for i in range(len(bdays)):
         for c in UniqueUnderlyings:
-                MosaicSLice = OA.get_option_slice_settlement(symbol='B', exchange='ICE', term= c,
-                                    as_of_date= bdays[i].date())
+                if commodity == 'Brent':
+                    MosaicSLice = OA.get_option_slice_settlement(symbol='B', exchange='ICE', term= c,
+                                        as_of_date= bdays[i].date())
+                elif commodity == 'WTI':
+                    MosaicSLice = OA.get_option_slice_settlement(symbol='LO', exchange='CME', term= c,
+                                        as_of_date= bdays[i].date())
                 Timeseries[c][i] = MosaicSLice.loc[0,'future_value']
                 # Get Option specs with c underlying
                 opts = [o for o in option_specs if o['underlying'] == c]
